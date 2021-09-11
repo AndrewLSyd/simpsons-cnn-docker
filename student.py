@@ -11,76 +11,8 @@ import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
 
-"""
-********************************************************************************
-* choice of architecture, algorithms, and enhancements
-********************************************************************************
-CNNs, with their automatic image feature generation and efficient parameter sharing [1] were the natural choice for this task. I briefly experimented with regular fully connected ANNs of varying depths and numbers of hidden layers, but they did not perform that well, achieving accuracies of only 30-40%. It was found that CNNs easily outperformed ANNs.
-
-Given all the possible architectures (width, depth, max pooling, batch normalisation, skip connections, …), activation functions and optimisers and hyper parameters, clearly, the size of the search space make a brute force, purely random search unfeasible.
-
-Thus, being methodological was paramount; the transformations, architecture and training configurations of all models were programmatically saved to a google spreadsheet (see this public gsheets https://docs.google.com/spreadsheets/d/1u9UyFmrOLXEPozd-dPBhQxp_Lt-UcxKKHXtPyDW9nX4/edit?usp=sharing) to keep track of experiments performed. Given the search space, it’s also very important to tune and experiment in order of importance (e.g., tuning the learning rate before finding a decent architecture or set of image transforms is putting the cart before the horse). My order of experimentation was as follows: find a baseline model, experiment with data transforms, experiment with layers (depth, width, max pooling, batch normalisation), experiment with activation functions and then experiment with optimisers and their parameters. Finally, after locking everything in I retrained on 95% of the training data (using the 5% to check if the model had converged). Ultimately, what the deciding factor for model architecture was its performance on the validation (and test) data. Looking at this google sheet, you can see that over time my validation score improves, but I quickly hit a point of diminishing returns and struggle to get validation accuracy much greater than my final submission score of 96-7%. To an extent, this method of stepwise experimentation falsely assumes independence of each step I am tuning, but given the vast size of the search space, it is a reasonable concession.
-
-I saved every 10 epochs of all models and generally trained them for 3000 epochs towards the end of my experimentation. This allowed me to train a model past convergence into overfit territory and subsequently retrieve an epoch that had just converged (according to the validation data). I had access to a non-preemptible virtual machine on Google Cloud Platform with a P100 GPU running 24/7 that could fit two models in parallel comfortably. I also set up a clean repo/bash setup script that allowed me to easily spin up an arbitrary number of GCP virtual machines to increase parallel search capacity, but around this stage I was already achieving a final submission score of 90-91% so was deemed unnecessary.
-
-Start with a reasonable, baseline model
-I started with a baseline CNN model to build on a tweak by taking inspiration from AlexNet as well as model structures used in image recognition tasks like the MNIST, Fashion MNIST as well as CIFAR-10. I also looked to recommendations from [1, 2, 4] to guide my “default” baseline model choice.
-
-Depth (numbers of convolutional layers) - I tested various depths, from 1 to 6. 5 Seemed to work best for me. A kernel size and stride of 5x5 and 1 were used for all convolutional layers (same as AlexNet’s first CNN layer).
-
-Width – taking inspiration from AlexNet and a comment Professor Blair made in one of the lectures, initially, a “funnel” shape was used with the first layer having a width of 64 before expanding to up to 512 for deeper layers. Later on, I discovered success by keeping the number of filters mostly constant and testing different numbers of filters.
-
-Fully connected network - I experimented with 1-3 hidden layers. 2 layers seemed to give similar performance, so I proceeded with just 1 hidden layer.
-
-Max pooling - my initial experimentation had max pooling layers for each layer but cause too much information to be lost from subsampling. Taking inspiration from AlexNet, my final network had a max pooling layer at the beginning and somewhere towards the end of the network. I found that max pooling layers helped somewhat in overfitting.
-
-Batch normalisation - was recommended by [1], [2]. At a cost of only a few parameters per layer, batch normalisation can help ameliorate vanishing/exploding gradients. Batch normalisation - was used at every layer to speed up gradient descent to discourage vanishing and exploding gradients by keeping inputs and outputs to each layer inside a healthy range and speed up the training process.
-Had I more time, I would have investigated skip connections/Resnet as well as taking inspiration from other well-known CNNs (e.g., ResNet, VCG).
-
-********************************************************************************
-* choice of loss function and optimiser
-********************************************************************************
-Loss function – this is a multiclass classification problem. The two obvious candidates are to either output nn.LogSoftmax and use nn.NLLLoss or to output logits and use nn.CrossEntropyLoss. According to [4, pp187] they are equivalent so we have gone with outputting logits and using nn.CrossEntropyLoss.
-Optimiser - based on the recommendation of Geron [1] and He (of He initialisation fame) [3] I initially used Nesterov accelerated gradient descent. After my model architecture was starting to finalise, I experimented with the popular Adam and it seemed to perform a bit better (perhaps it’s less sensitive to hyperparameters) so I proceeded with Adam. At this stage, my model was performing at 96-97% accuracy on the final submission, so I only bothered testing another learning rate for Adam (which performed poorly).
-
-********************************************************************************
-* choice of image transformations
-********************************************************************************
-One of the best ways to improve model generalisability and performance is to feed it more data [3]. Unfortunately, getting more clean labelled data is often difficult. This is where data augmentation comes in – by randomly transforming the data in such a way that a human would still recognise it as the labelled object we are generating additional pseudo-data for our model [4, pp346-7].
-
-Greyscale transform – given the data is inherently greyscale, removing the 2 redundant channels was a no-brainer.
-
-Random horizontal flip – flipping images along the y-axis creates a realistic pseudo-image that in most cases, humans would not realise was flipped. Also, a no-brainer. A flip probability of 50% was used, as proposed by [3]
-
-Colour jitter – was used to randomly alter the brightness and hue of the image as proposed by [3]
-Auto augment policy – it was found that in addition to the above transforms, using an auto augment policy that randomly transforms images according to a well-known policy helped model performance. The incredibly well-known Image Net transforms as well as CIFAR-10’s transforms were tested. Image net seemed to perform marginally better and was thus used. It was observed that using the image net auto augment policy was so effective at creating pseudo data that even in later epochs (2500+), the network struggled to “overfit” and achieve even training accuracies more than 3-4% above validation data. 
-
-********************************************************************************
-* (d) tuning of meta parameters
-********************************************************************************
-Optimisers and hyper parameters
-I experimented with batch sizes of 256, 512 and 1024 (which didn’t fit into my GPU’s RAM). 256 rather than 512 would possibly help speed up training with quicker auto grad calculations, and some additional randomness to push it out of local optima. In the end, it didn’t appear to make a material difference, so I stuck with 256. Powers of two were experimented with, as X. 
-Learning rate and momentum – were kept at default values. Had I more time I would have run a quick grid search across these values.
-
-Activation function – whilst the ever-popular ReLU provides us with non-linearity, saturation for only small values (and hence fewer vanishing gradients) and quick computation [1], it suffers from the possibility of “dead neurons” – neurons with a negative input and gradients stuck at zero. For much of my experimentation, ELU was used an alternative that also provides non-linearity and saturation in one direction but gives the opportunity for “dead neurons” to revive and is recommended over ReLU by Geron [1] and Clevert et al. [5]. Interestingly, experimentation towards the end showed ReLU outperforming ELU slightly, so my final model uses ReLU rather than ELU.
-
-********************************************************************************
-* use of validation set, and any other steps taken to improve generalization and avoid overfitting
-********************************************************************************
-Validation data – was used with a typical training split of 80% to estimate final test set error. The ratio of training to validation error was also used as a measure of level of overfit (e.g., a model with 95% training accuracy and 75% validation accuracy shows signs of overfitting) and helped guide training decisions like whether to implement more regularisation techniques and how many more epochs to train for. Models were allowed to fit pasted optimal convergence into overfit territory, before retrieving an earlier model that had “just converged” – like early stopping, except I allowed the model to far overfit, in case early stopping occurred at a local optimum.
-Max pooling – reduces the risk of overfitting by subsampling and reducing the number of parameters [1, page 371].
-Hinton’s dropout layers – were applied at each convolutional layer to randomly “turn off” neurons during training, to reduce co-dependence between neurons and making the network less sensitive to reliance on a few input neurons [1, pp 312].
-Heavy use of transforms – the auto transforms based on image net provided the model with huge increase in amount of training data. It was observed that with the random transforms, the network struggled to overfit over, event with 3000 epochs (e.g., the network’s training accuracy struggled to climb much higher than 4% over the validation accuracy) as the network was fed a “different” data set at each epoch, making it difficult to overfit to any particular set of images.
-References
-[1]	A. Geron, Hands-On Machine Learning with Scikit-Learn and TensorFlow. 2018.
-[2]	F. Chollet, Deep Learning with Python. 2020.
-[3]	He et al., Bag of Tricks for Image Classification with Convolutional Neural Networks. 2019.
-[4]	E Stevens, L Antiga, T Viehmann, Deep Learning with PyTorch. 2020
-[5]	D Clevert, T Unterthiner, S Hochreiter, Fast and Accurate Deep Network Learning by Exponential Linear Units (ELUs)
-"""
-
 ############################################################################
-######     Specify transform(s) to be applied to the input images     ######
+######     Specify transforms to be applied to the input images     ######
 ############################################################################
 def transform(mode):
     """
