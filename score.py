@@ -128,9 +128,10 @@ if test_mode:
 
     logging.info("testing network")
     test_network(net, testloader)
-
-else:  # score on new data
-    # used https://heartbeat.fritz.ai/basics-of-image-classification-with-pytorch-2f8973c51864 as a reference
+# score on a new smaller set of data, far less efficient than the batch processing in "test mode", but easier
+# for the user (they don't have to move images into a separate folder for each target label).
+# used https://heartbeat.fritz.ai/basics-of-image-classification-with-pytorch-2f8973c51864 as a reference
+else:
     logging.info("scoring on new data")
     transform=student.transform('test')    
     filenames = []
